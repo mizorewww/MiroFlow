@@ -16,6 +16,7 @@ from src.core.pipeline import (
     create_pipeline_components,
     execute_task_pipeline,
 )
+from src.utils.markdown_export import write_task_markdown
 from omegaconf import DictConfig
 
 
@@ -25,6 +26,7 @@ async def single_task(
     task_id: str = "task_1",
     task_description: str = "Write a python code to say 'Hello, World!', use python to execute the code.",
     task_file_name: str = "",
+    config_file_name: str = "",
 ) -> None:
     """Asynchrono us main function."""
     if os.getenv("MIROFLOW_PRINT_CONFIG", "").strip().lower() in {
@@ -59,10 +61,21 @@ async def single_task(
         log_path=log_path.absolute(),
     )
 
+    markdown_path = write_task_markdown(
+        output_path=pathlib.Path(".") / pathlib.Path(cfg.output_dir) / f"{task_name}.md",
+        task_id=task_id,
+        task_description=task_description,
+        final_summary=final_summary,
+        final_boxed_answer=final_boxed_answer,
+        log_path=log_path.absolute(),
+        config_name=config_file_name or "<unknown>",
+    )
+
     # Print task result
     logger.info(
         f"Final Output for Task: {task_id}, summary = {final_summary}, boxed_answer = {final_boxed_answer}"
     )
+    logger.info(f"Markdown report saved to {markdown_path.absolute()}")
 
 
 def main(
@@ -88,4 +101,13 @@ def main(
         logger.info("Logger initialized successfully")
 
         # Tracing functionality removed - miroflow-contrib deleted
-        asyncio.run(single_task(cfg, logger, str(task_id), task, task_file_name))
+        asyncio.run(
+            single_task(
+                cfg,
+                logger,
+                str(task_id),
+                task,
+                task_file_name,
+                chosen_config_name,
+            )
+        )
