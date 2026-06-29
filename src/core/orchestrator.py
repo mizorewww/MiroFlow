@@ -16,7 +16,7 @@ from omegaconf import DictConfig
 
 
 from src.llm.provider_client_base import LLMProviderClientBase
-from src.logging.live_trace import emit_live_trace
+from src.logging.live_trace import emit_live_trace, redact_secrets
 from src.llm.providers.claude_openrouter_client import ContextLimitError
 from src.logging.logger import bootstrap_logger
 from src.logging.task_tracer import TaskTracer
@@ -76,6 +76,80 @@ def _load_agent_prompt_class(prompt_class_name: str) -> BaseAgentPrompt:
             f"Could not import class '{prompt_class_name}' from 'config.agent_prompts': {e}"
         )
     return PromptClass()
+
+
+def _normalize_task_guidance_mode(value: Any) -> str:
+    if isinstance(value, bool):
+        return "system" if value else "none"
+
+    mode = str(value or "system").strip().lower()
+    aliases = {
+        "true": "system",
+        "on": "system",
+        "yes": "system",
+        "false": "none",
+        "off": "none",
+        "no": "none",
+        "disabled": "none",
+    }
+    mode = aliases.get(mode, mode)
+    if mode not in {"system", "user", "none"}:
+        logger.warning(
+            "Unknown task_guidance_mode=%s; falling back to system guidance.",
+            value,
+        )
+        return "system"
+    return mode
+
+
+def _build_main_task_guidance(chinese_context: bool) -> str:
+    task_guidance = """
+
+Your task is to comprehensively address the question by actively collecting detailed information from the web, and generating a thorough, transparent report. Your goal is NOT to rush a single definitive answer or conclusion, but rather to gather complete information and present ALL plausible candidate answers you find, accompanied by clearly documented supporting evidence, reasoning steps, uncertainties, and explicit intermediate findings.
+
+User does not intend to set traps or create confusion on purpose. Handle the task using the most common, reasonable, and straightforward interpretation, and do not overthink or focus on rare or far-fetched interpretations.
+
+Important considerations:
+- Collect comprehensive information from reliable sources to understand all aspects of the question.
+- Present every possible candidate answer identified during your information gathering, regardless of uncertainty, ambiguity, or incomplete verification. Avoid premature conclusions or omission of any discovered possibility.
+- Explicitly document detailed facts, evidence, and reasoning steps supporting each candidate answer, carefully preserving intermediate analysis results.
+- Clearly flag and retain any uncertainties, conflicting interpretations, or alternative understandings identified during information gathering. Do not arbitrarily discard or resolve these issues on your own.
+- If the question's explicit instructions (e.g., numeric precision, formatting, specific requirements) appear inconsistent, unclear, erroneous, or potentially mismatched with general guidelines or provided examples, explicitly record and clearly present all plausible interpretations and corresponding candidate answers.  
+
+Recognize that the original task description might itself contain mistakes, imprecision, inaccuracies, or conflicts introduced unintentionally by the user due to carelessness, misunderstanding, or limited expertise. Do NOT try to second-guess or "correct" these instructions internally; instead, transparently present findings according to every plausible interpretation.
+
+Your objective is maximum completeness, transparency, and detailed documentation to empower the user to judge and select their preferred answer independently. Even if uncertain, explicitly documenting the existence of possible answers significantly enhances the user's experience, ensuring no plausible solution is irreversibly omitted due to early misunderstanding or premature filtering.
+"""
+
+    if chinese_context:
+        task_guidance += """
+
+## 中文任务处理指导
+
+如果任务涉及中文语境，请遵循以下指导：
+
+- **信息收集策略**：使用中文关键词进行网络搜索，优先浏览中文网页，以获取更准确和全面的中文资源
+- **思考过程**：所有分析、推理、判断等思考过程都应使用中文表达，保持语义的一致性
+- **候选答案收集**：对于中文问题，收集所有可能的中文答案选项，包括不同的表达方式和格式
+- **证据文档化**：保持中文资源的原始格式，避免不必要的翻译或改写，确保信息的准确性
+- **不确定性标注**：使用中文清晰地标记任何不确定性、冲突信息或需要进一步验证的内容
+- **结果组织**：以中文组织和呈现最终报告，使用恰当的中文术语和表达习惯
+- **过程透明化**：所有步骤描述、状态更新、中间结果等都应使用中文，确保用户理解
+"""
+    return task_guidance
+
+
+def _format_exception_detail(error: Exception) -> str:
+    detail = str(error)
+    last_attempt = getattr(error, "last_attempt", None)
+    if last_attempt is not None:
+        try:
+            last_error = last_attempt.exception()
+        except Exception:
+            last_error = None
+        if last_error is not None:
+            detail = f"{detail}; last attempt: {last_error}"
+    return redact_secrets(detail)
 
 
 class Orchestrator:
@@ -331,10 +405,11 @@ class Orchestrator:
             return None, True, "context_limit"
 
         except Exception as e:
-            logger.debug(f"⚠️ {purpose} call failed: {e}")
+            error_detail = _format_exception_detail(e)
+            logger.debug(f"⚠️ {purpose} call failed: {error_detail}")
             self.task_log.log_step(
                 f"{purpose.lower().replace(' ', '_')}_error",
-                f"{purpose} failed: {str(e)}",
+                f"{purpose} failed: {error_detail}",
                 "failed",
             )
             return None, True, None
@@ -349,7 +424,6 @@ class Orchestrator:
         task_description,
         task_failed,
         agent_type="main",
-        task_guidence="",
     ):
         """
         Handle context limit retry logic when processing summary
@@ -367,7 +441,7 @@ class Orchestrator:
         while True:
             # Generate summary prompt
             summary_prompt = agent_prompt_instance.generate_summarize_prompt(
-                task_description + task_guidence,
+                task_description,
                 task_failed=task_failed,
                 chinese_context=self.chinese_context,
             )
@@ -818,44 +892,16 @@ class Orchestrator:
             task_description, task_file_name
         )
 
-        task_guidence = """
-
-Your task is to comprehensively address the question by actively collecting detailed information from the web, and generating a thorough, transparent report. Your goal is NOT to rush a single definitive answer or conclusion, but rather to gather complete information and present ALL plausible candidate answers you find, accompanied by clearly documented supporting evidence, reasoning steps, uncertainties, and explicit intermediate findings.
-
-User does not intend to set traps or create confusion on purpose. Handle the task using the most common, reasonable, and straightforward interpretation, and do not overthink or focus on rare or far-fetched interpretations.
-
-Important considerations:
-- Collect comprehensive information from reliable sources to understand all aspects of the question.
-- Present every possible candidate answer identified during your information gathering, regardless of uncertainty, ambiguity, or incomplete verification. Avoid premature conclusions or omission of any discovered possibility.
-- Explicitly document detailed facts, evidence, and reasoning steps supporting each candidate answer, carefully preserving intermediate analysis results.
-- Clearly flag and retain any uncertainties, conflicting interpretations, or alternative understandings identified during information gathering. Do not arbitrarily discard or resolve these issues on your own.
-- If the question's explicit instructions (e.g., numeric precision, formatting, specific requirements) appear inconsistent, unclear, erroneous, or potentially mismatched with general guidelines or provided examples, explicitly record and clearly present all plausible interpretations and corresponding candidate answers.  
-
-Recognize that the original task description might itself contain mistakes, imprecision, inaccuracies, or conflicts introduced unintentionally by the user due to carelessness, misunderstanding, or limited expertise. Do NOT try to second-guess or "correct" these instructions internally; instead, transparently present findings according to every plausible interpretation.
-
-Your objective is maximum completeness, transparency, and detailed documentation to empower the user to judge and select their preferred answer independently. Even if uncertain, explicitly documenting the existence of possible answers significantly enhances the user's experience, ensuring no plausible solution is irreversibly omitted due to early misunderstanding or premature filtering.
-"""
-
-        # Add Chinese-specific guidance if enabled
-        if self.chinese_context:
-            task_guidence += """
-
-## 中文任务处理指导
-
-如果任务涉及中文语境，请遵循以下指导：
-
-- **信息收集策略**：使用中文关键词进行网络搜索，优先浏览中文网页，以获取更准确和全面的中文资源
-- **思考过程**：所有分析、推理、判断等思考过程都应使用中文表达，保持语义的一致性
-- **候选答案收集**：对于中文问题，收集所有可能的中文答案选项，包括不同的表达方式和格式
-- **证据文档化**：保持中文资源的原始格式，避免不必要的翻译或改写，确保信息的准确性
-- **不确定性标注**：使用中文清晰地标记任何不确定性、冲突信息或需要进一步验证的内容
-- **结果组织**：以中文组织和呈现最终报告，使用恰当的中文术语和表达习惯
-- **过程透明化**：所有步骤描述、状态更新、中间结果等都应使用中文，确保用户理解
-"""
-
-        initial_user_content[0]["text"] = (
-            initial_user_content[0]["text"] + task_guidence
+        input_process_cfg = self.cfg.main_agent.get("input_process", {})
+        task_guidance_mode = _normalize_task_guidance_mode(
+            input_process_cfg.get("task_guidance_mode", "system")
         )
+        task_guidance = _build_main_task_guidance(self.chinese_context)
+        runtime_system_guidance = ""
+        if task_guidance_mode == "user":
+            initial_user_content[0]["text"] += task_guidance
+        elif task_guidance_mode == "system":
+            runtime_system_guidance = task_guidance
 
         hint_notes = ""  # Initialize hint_notes
         if self.cfg.main_agent.input_process.hint_generation:
@@ -876,8 +922,10 @@ Your objective is maximum completeness, transparency, and detailed documentation
                 )
 
                 # Update initial user content
-                original_text = initial_user_content[0]["text"]
-                initial_user_content[0]["text"] = original_text + hint_notes
+                if task_guidance_mode == "user":
+                    initial_user_content[0]["text"] += hint_notes
+                else:
+                    runtime_system_guidance += hint_notes
             except Exception as e:
                 logger.error(f"Hint generation failed after retries: {str(e)}")
                 self.task_log.log_step(
@@ -911,6 +959,12 @@ Your objective is maximum completeness, transparency, and detailed documentation
                 chinese_context=self.chinese_context,
             )
         )
+        if runtime_system_guidance.strip():
+            system_prompt += (
+                "\n\n# Runtime Task Guidance\n\n"
+                + runtime_system_guidance.strip()
+                + "\n"
+            )
 
         # 4. Main loop: LLM <-> Tools
         max_turns = self.cfg.main_agent.max_turns
@@ -1153,7 +1207,6 @@ Your objective is maximum completeness, transparency, and detailed documentation
             task_description,
             task_failed,
             agent_type="main",
-            task_guidence=task_guidence,
         )
 
         # Handle response result

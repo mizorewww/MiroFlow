@@ -159,7 +159,7 @@ You accomplish a given task iteratively, breaking it down into clear steps and w
                 "If a definitive answer could not be determined, make a well-informed educated guess based on the conversation.\n\n"
                 "The original question is repeated here for reference:\n\n"
                 f"---\n{task_description}\n---\n\n"
-                "Summarize ALL working history for this task, including your step-by-step thoughts, all tool calls, and all tool results (i.e., the full solving trajectory so far).\n"
+                "Summarize the visible working history for this task, including a concise reasoning summary, all tool calls, and all tool results. Do not include hidden chain-of-thought; report only decision-relevant rationale and evidence.\n"
                 "Output the FINAL ANSWER and detailed supporting information of the task given to you.\n\n"
                 "If you found any useful facts, data, or quotes directly relevant to the original task, include them clearly and completely.\n"
                 "If you reached a conclusion or answer, include it as part of the response.\n"

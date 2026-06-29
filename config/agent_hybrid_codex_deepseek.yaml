@@ -43,6 +43,9 @@ main_agent:
   input_process:
     hint_generation: false
     hint_llm_base_url: "${oc.env:HINT_LLM_BASE_URL,https://api.openai.com/v1}"
+    # system keeps --task as the user's pure question while preserving runtime guidance.
+    # Use "none" to disable this extra guidance or "user" for legacy behavior.
+    task_guidance_mode: system
   output_process:
     final_answer_extraction: false
     final_answer_llm_base_url: "${oc.env:FINAL_ANSWER_LLM_BASE_URL,https://api.openai.com/v1}"

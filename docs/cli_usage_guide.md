@@ -78,6 +78,29 @@ uv run python main.py trace \
 
 日常使用时，`--task` 应该尽量只是问题本身。搜索组件选择策略写在 `agent_hybrid_codex_deepseek` 的主控 prompt 里，主控会自己判断什么时候用 DeepSeek 搜索、什么时候用 Codex web_search、什么时候两者都用。
 
+默认配置会把额外的“完整调研、保留不确定性、透明报告”等运行规则放在 system prompt 中，而不是拼进用户问题里。相关开关是：
+
+```bash
+main_agent.input_process.task_guidance_mode=system
+```
+
+可选值：
+
+- `system`：默认，`--task` 保持纯问题，运行规则进 system prompt。
+- `none`：完全关闭这段额外运行规则。
+- `user`：兼容旧行为，把运行规则附加到用户消息后面。
+
+例如完全关闭额外运行规则：
+
+```bash
+UV_CACHE_DIR=/private/tmp/miroflow-uv-cache \
+uv run python main.py trace \
+  --config_file_name=agent_hybrid_codex_deepseek \
+  --task_id=plain_prompt_example \
+  --task="What is the current NASDAQ Composite index price?" \
+  main_agent.input_process.task_guidance_mode=none
+```
+
 ## 4. 调试：强制使用某个搜索组件
 
 下面这些写法主要用于调试路由和对比组件效果，不是日常推荐写法。

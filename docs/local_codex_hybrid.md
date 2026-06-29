@@ -82,6 +82,22 @@ summary. The existing JSON trace remains at:
 logs/<task_id>.log
 ```
 
+## User Task Text vs Runtime Guidance
+
+`--task` should normally be the user's plain question. The extra MiroFlow
+guidance about broad research, uncertainty tracking, and transparent reporting
+is kept in the system prompt by default:
+
+```yaml
+main_agent:
+  input_process:
+    task_guidance_mode: system
+```
+
+Set `main_agent.input_process.task_guidance_mode=none` to disable that extra
+guidance, or `user` to restore the older behavior that appended it to the user
+message.
+
 ## Run Examples
 
 Pure DeepSeek:

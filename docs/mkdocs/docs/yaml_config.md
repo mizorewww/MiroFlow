@@ -112,6 +112,7 @@ main_agent:
   
   input_process:
     hint_generation: true      # Use LLM for task hint generation
+    task_guidance_mode: system  # Keep runtime guidance in system prompt; use none/user to change
   output_process:
     final_answer_extraction: true  # Use LLM for answer extraction
 
