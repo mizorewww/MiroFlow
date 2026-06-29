@@ -20,6 +20,15 @@ from src.utils.markdown_export import write_task_markdown
 from omegaconf import DictConfig
 
 
+def _normalize_cli_text(value) -> str:
+    """Fire parses comma-separated CLI values as tuples; turn them back into text."""
+    if value is None:
+        return ""
+    if isinstance(value, (list, tuple)):
+        return ", ".join(_normalize_cli_text(item) for item in value)
+    return str(value)
+
+
 async def single_task(
     cfg: DictConfig,
     logger: logging.Logger,
@@ -29,6 +38,11 @@ async def single_task(
     config_file_name: str = "",
 ) -> None:
     """Asynchrono us main function."""
+    task_id = _normalize_cli_text(task_id)
+    task_description = _normalize_cli_text(task_description)
+    task_file_name = _normalize_cli_text(task_file_name)
+    config_file_name = _normalize_cli_text(config_file_name)
+
     if os.getenv("MIROFLOW_PRINT_CONFIG", "").strip().lower() in {
         "1",
         "true",
@@ -85,6 +99,11 @@ def main(
     task_file_name: str = "",
     config_file_name: str = "",
 ):
+    config_file_name = _normalize_cli_text(config_file_name)
+    task_id = _normalize_cli_text(task_id)
+    task = _normalize_cli_text(task)
+    task_file_name = _normalize_cli_text(task_file_name)
+
     if config_file_name:
         chosen_config_name = config_file_name
     else:

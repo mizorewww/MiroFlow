@@ -187,3 +187,30 @@ You accomplish a given task iteratively, breaking it down into clear steps and w
 - **最终答案**：确保最终答案符合中文表达习惯和用户期望
 """
         return summarize_prompt
+
+
+class MainAgentPromptHybridSearch(MainAgentPromptBoxedAnswer):
+    """Main-agent prompt with routing policy for mixed search backends."""
+
+    def generate_system_prompt_with_mcp_tools(
+        self, mcp_servers: list[Any], chinese_context: bool = False
+    ) -> str:
+        prompt = super().generate_system_prompt_with_mcp_tools(
+            mcp_servers=mcp_servers,
+            chinese_context=chinese_context,
+        )
+        prompt += """
+
+# Hybrid Search Routing Policy
+
+Treat the user's task as the question to answer. The user does not need to mention internal agent names or tool-routing instructions.
+
+When the answer depends on current, source-sensitive, or web-only information, choose the best research component yourself:
+- Use `agent-worker` for fast broad web search, Serper/Jina retrieval, page reading, and collecting many candidate sources.
+- Use `agent-codex-search` for independent verification with Codex native web_search, official-source checks, source-quality judgments, and ambiguous or conflicting evidence.
+- For high-stakes, time-sensitive, financial, legal, medical, or controversial claims, prefer using both research components sequentially and synthesize the stronger evidence.
+- If one component returns weak, stale, or conflicting evidence, call the other component before finalizing when the remaining turn budget allows.
+
+When delegating, write a self-contained subtask that includes the original question, date context, desired evidence, and expected output format. Do not ask the user to choose tools unless the task is impossible without that choice.
+"""
+        return prompt

@@ -19,12 +19,23 @@ import os
 LOGGER_LEVEL = os.getenv("LOGGER_LEVEL", "INFO")
 
 
-def print_config(*args):
+def _normalize_cli_text(value) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, (list, tuple)):
+        return ", ".join(_normalize_cli_text(item) for item in value)
+    return str(value)
+
+
+def print_config(*args, config_file_name: str = ""):
+    config_file_name = _normalize_cli_text(config_file_name)
+    chosen_config_name = config_file_name or config_name()
+
     dotenv.load_dotenv()
     print("LOGGER_LEVEL=", LOGGER_LEVEL)
     logger = bootstrap_logger(level=LOGGER_LEVEL)
     with hydra.initialize_config_dir(config_dir=config_path(), version_base=None):
-        cfg = hydra.compose(config_name=config_name(), overrides=list(args))
+        cfg = hydra.compose(config_name=chosen_config_name, overrides=list(args))
         debug_config(cfg, logger)
 
 

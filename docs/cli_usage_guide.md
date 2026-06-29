@@ -68,7 +68,7 @@ UV_CACHE_DIR=/private/tmp/miroflow-uv-cache \
 uv run python main.py trace \
   --config_file_name=agent_hybrid_codex_deepseek \
   --task_id=hybrid_example \
-  --task="Use the available research agents to answer: What is the current NASDAQ Composite index price and what are the main factors affecting it today? Compare evidence and answer briefly with sources."
+  --task="What is the current NASDAQ Composite index price and what are the main factors affecting it today?"
 ```
 
 这个配置里主控是 Codex/GPT 5.5 xhigh。它能调用两个研究组件：
@@ -76,9 +76,11 @@ uv run python main.py trace \
 - `agent-worker`：DeepSeek + Serper/Jina，适合快速搜索、网页抓取、读取页面。
 - `agent-codex-search`：Codex/GPT 5.5 + 原生 `web_search`，适合独立交叉验证、官方来源优先、复杂来源判断。
 
-## 4. 指定使用某个搜索组件
+日常使用时，`--task` 应该尽量只是问题本身。搜索组件选择策略写在 `agent_hybrid_codex_deepseek` 的主控 prompt 里，主控会自己判断什么时候用 DeepSeek 搜索、什么时候用 Codex web_search、什么时候两者都用。
 
-MiroFlow 的主控会读任务描述。想强制某个组件时，直接在 `--task` 里写清楚。
+## 4. 调试：强制使用某个搜索组件
+
+下面这些写法主要用于调试路由和对比组件效果，不是日常推荐写法。
 
 只用 DeepSeek 搜索组件：
 
@@ -122,7 +124,7 @@ UV_CACHE_DIR=/private/tmp/miroflow-uv-cache \
 uv run python main.py trace \
   --config_file_name=agent_hybrid_codex_deepseek \
   --task_id=live_trace_example \
-  --task="Use both research agents to compare the latest OpenAI news item and summarize the result."
+  --task="What is the latest item on OpenAI's official news page?"
 ```
 
 注意：
@@ -165,7 +167,7 @@ UV_CACHE_DIR=/private/tmp/miroflow-uv-cache \
 uv run python main.py trace \
   --config_file_name=agent_hybrid_codex_deepseek \
   --task_id=bounded_run \
-  --task="Use both search agents and answer briefly: What changed in OpenAI news recently?" \
+  --task="What changed in OpenAI news recently?" \
   main_agent.max_turns=4 \
   sub_agents.agent-worker.max_turns=3 \
   sub_agents.agent-codex-search.max_turns=1 \
@@ -268,7 +270,10 @@ uv run python main.py trace --config_file_name=agent_llm_deepseek --task_id=quic
 需要高质量最终回答：
 
 ```bash
-uv run python main.py trace --config_file_name=agent_hybrid_codex_deepseek --task_id=hybrid --task="..."
+uv run python main.py trace \
+  --config_file_name=agent_hybrid_codex_deepseek \
+  --task_id=hybrid \
+  --task="调查SK Hynix最近的股价相关新闻。要搞明白SK Hynix之后的股价走向，我应该研究什么问题？"
 ```
 
 需要双搜索交叉验证：
@@ -277,8 +282,10 @@ uv run python main.py trace --config_file_name=agent_hybrid_codex_deepseek --tas
 uv run python main.py trace \
   --config_file_name=agent_hybrid_codex_deepseek \
   --task_id=cross_check \
-  --task="Use both agent-worker and agent-codex-search, compare evidence, then write the merged answer: ..."
+  --task="What is the current NASDAQ Composite index price and what are the main factors affecting it today?"
 ```
+
+混合配置会根据问题自动决定是否交叉验证；通常不需要在问题里写 agent 名称。
 
 看结果：
 
@@ -291,4 +298,3 @@ open logs/<task_id>.md
 ```bash
 less logs/<task_id>.log
 ```
-

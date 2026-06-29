@@ -99,7 +99,7 @@ Hybrid Codex + DeepSeek:
 uv run python main.py trace \
   --config_file_name=agent_hybrid_codex_deepseek \
   --task_id=hybrid_nasdaq \
-  --task="Use the available worker agent to collect current web evidence. What is the current NASDAQ Composite index price and what are the main factors affecting it today? Answer briefly with sources."
+  --task="What is the current NASDAQ Composite index price and what are the main factors affecting it today?"
 ```
 
 ## Codex Account Smoke Test

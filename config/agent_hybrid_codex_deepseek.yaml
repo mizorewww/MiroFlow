@@ -5,7 +5,7 @@ defaults:
 
 
 main_agent:
-  prompt_class: MainAgentPromptBoxedAnswer
+  prompt_class: MainAgentPromptHybridSearch
   llm:
     provider_class: "CodexCliClient"
     model_name: "gpt-5.5"
