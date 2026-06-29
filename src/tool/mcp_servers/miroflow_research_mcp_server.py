@@ -232,9 +232,15 @@ if __name__ == "__main__":
         help="Port to use when running with HTTP transport (default: 8080)",
     )
     parser.add_argument(
+        "--host",
+        type=str,
+        default=os.environ.get("MIROFLOW_MCP_HOST", "127.0.0.1"),
+        help="Host to bind when running with HTTP transport (default: 127.0.0.1)",
+    )
+    parser.add_argument(
         "--path",
         type=str,
-        default="/mcp",
+        default=os.environ.get("MIROFLOW_MCP_PATH", "/mcp"),
         help="URL path to use when running with HTTP transport (default: /mcp)",
     )
     args = parser.parse_args()
@@ -243,6 +249,7 @@ if __name__ == "__main__":
     else:
         mcp.run(
             transport="streamable-http",
+            host=args.host,
             port=args.port,
             path=args.path,
             show_banner=False,

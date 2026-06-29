@@ -291,6 +291,22 @@ config/tool/tool-miroflow-research.yaml
 
 详细说明见 `docs/miroflow_research_mcp.md`。
 
+HTTP / streamable-http 启动：
+
+```bash
+MIROFLOW_MCP_CONFIG_NAME=agent_hybrid_codex_deepseek \
+MIROFLOW_MCP_HOST=0.0.0.0 \
+MIROFLOW_MCP_PORT=8080 \
+MIROFLOW_MCP_PATH=/mcp \
+uv run ./scripts/run_miroflow_research_mcp_http.sh
+```
+
+HTTP endpoint:
+
+```text
+http://<host>:8080/mcp
+```
+
 ## 11. 评分和汇总
 
 已有 CLI 子命令：

@@ -98,3 +98,54 @@ main.py trace --config_file_name=$MIROFLOW_MCP_CONFIG_NAME
 ```
 
 then returns the Markdown report content.
+
+## HTTP / Streamable HTTP Server
+
+Start the HTTP MCP server:
+
+```bash
+MIROFLOW_MCP_CONFIG_NAME=agent_hybrid_codex_deepseek \
+MIROFLOW_MCP_HOST=0.0.0.0 \
+MIROFLOW_MCP_PORT=8080 \
+MIROFLOW_MCP_PATH=/mcp \
+uv run ./scripts/run_miroflow_research_mcp_http.sh
+```
+
+The endpoint is:
+
+```text
+http://<host>:8080/mcp
+```
+
+For a local-only server, keep `MIROFLOW_MCP_HOST=127.0.0.1`. For LAN access,
+use `0.0.0.0`.
+
+Example Python client:
+
+```python
+import asyncio
+from mcp import ClientSession
+from mcp.client.streamable_http import streamablehttp_client
+
+
+async def main():
+    async with streamablehttp_client("http://127.0.0.1:8080/mcp") as (
+        read,
+        write,
+        _,
+    ):
+        async with ClientSession(read, write) as session:
+            await session.initialize()
+            result = await session.call_tool(
+                "research",
+                arguments={"question": "Say exactly: HTTP_OK"},
+            )
+            print(result.content[-1].text)
+
+
+asyncio.run(main())
+```
+
+If the server machine does not have Codex CLI installed and logged in, set
+`MIROFLOW_MCP_CONFIG_NAME=agent_llm_deepseek` for smoke tests. The hybrid config
+requires the server's Codex account to be available.
