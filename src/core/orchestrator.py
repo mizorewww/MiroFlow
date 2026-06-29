@@ -152,6 +152,19 @@ def _format_exception_detail(error: Exception) -> str:
     return redact_secrets(detail)
 
 
+def _normalize_fallback_sub_agents(value: Any) -> list[str]:
+    if value is None:
+        return ["agent-worker", "agent-codex-search"]
+    if isinstance(value, str):
+        names = [item.strip() for item in value.split(",")]
+    else:
+        try:
+            names = [str(item).strip() for item in value]
+        except TypeError:
+            names = [str(value).strip()]
+    return [name for name in names if name]
+
+
 class Orchestrator:
     def __init__(
         self,
@@ -871,6 +884,113 @@ class Orchestrator:
         # Return final answer instead of dialogue log, so main agent can use directly
         return final_answer_text
 
+    def _build_main_failure_fallback_subtask(
+        self, task_description: str, failed_reason: str
+    ) -> str:
+        today = datetime.datetime.today().strftime("%Y-%m-%d")
+        return f"""The primary MiroFlow main agent failed before it could run any research tools.
+
+Failure reason:
+{failed_reason}
+
+Original user question:
+{task_description}
+
+Today is {today}. Act as the fallback research agent. Complete the task directly using your available research tools.
+
+Requirements:
+- If the question depends on current, source-sensitive, financial, legal, medical, or otherwise time-sensitive information, use web/search/reading tools before answering.
+- Include source URLs, dates, timestamps, and uncertainty notes when available.
+- If the question has ambiguous date wording such as "today" plus a historical month, explicitly identify the ambiguity and answer the most reasonable interpretation.
+- Return a complete Markdown report.
+- End with a concise \\boxed{{...}} answer for downstream extraction.
+"""
+
+    async def _run_main_failure_fallback(
+        self,
+        task_description: str,
+        keep_tool_result: int,
+        failed_reason: str,
+    ) -> str:
+        if not self.cfg.sub_agents:
+            self.task_log.log_step(
+                "main_agent_fallback_skipped",
+                "No sub-agents are configured for fallback.",
+                "warning",
+            )
+            return ""
+
+        fallback_agents = _normalize_fallback_sub_agents(
+            self.cfg.main_agent.get("fallback_sub_agents", None)
+        )
+        attempted_errors: list[str] = []
+
+        for sub_agent_name in fallback_agents:
+            if sub_agent_name not in self.cfg.sub_agents:
+                attempted_errors.append(f"{sub_agent_name}: not configured")
+                continue
+
+            self.task_log.log_step(
+                "main_agent_fallback_start",
+                f"Trying fallback sub-agent {sub_agent_name}",
+                "warning",
+                metadata={"sub_agent": sub_agent_name},
+            )
+            subtask = self._build_main_failure_fallback_subtask(
+                task_description, failed_reason
+            )
+
+            try:
+                result = await self.run_sub_agent(
+                    sub_agent_name, subtask, keep_tool_result
+                )
+            except Exception as error:
+                error_detail = _format_exception_detail(error)
+                attempted_errors.append(f"{sub_agent_name}: {error_detail}")
+                self.task_log.log_step(
+                    "main_agent_fallback_error",
+                    f"Fallback sub-agent {sub_agent_name} failed: {error_detail}",
+                    "failed",
+                    metadata={"sub_agent": sub_agent_name},
+                )
+                continue
+
+            if result and result.strip() and not result.startswith("No final answer"):
+                self.task_log.log_step(
+                    "main_agent_fallback_success",
+                    f"Fallback sub-agent {sub_agent_name} produced a result.",
+                    "success",
+                    metadata={"sub_agent": sub_agent_name},
+                )
+                return "\n".join(
+                    [
+                        "# Fallback Research Result",
+                        "",
+                        "The primary main agent failed before any research tool ran, so MiroFlow used a configured fallback research sub-agent.",
+                        "",
+                        f"- Fallback sub-agent: `{sub_agent_name}`",
+                        f"- Primary failure: `{redact_secrets(failed_reason)}`",
+                        "",
+                        result.strip(),
+                    ]
+                )
+
+            attempted_errors.append(f"{sub_agent_name}: empty result")
+            self.task_log.log_step(
+                "main_agent_fallback_empty",
+                f"Fallback sub-agent {sub_agent_name} returned no usable result.",
+                "warning",
+                metadata={"sub_agent": sub_agent_name},
+            )
+
+        self.task_log.log_step(
+            "main_agent_fallback_failed",
+            "All fallback sub-agents failed or returned empty results: "
+            + "; ".join(attempted_errors),
+            "failed",
+        )
+        return ""
+
     async def run_main_agent(
         self, task_description, task_file_name=None, task_id="default_task"
     ):
@@ -973,6 +1093,9 @@ class Orchestrator:
         turn_count = 0
         task_failed = False  # Track whether task failed
         reached_turn_limit = False
+        ran_main_tool_or_subagent = False
+        main_failure_reason = ""
+        fallback_final_answer_text = ""
         while turn_count < max_turns:
             turn_count += 1
             logger.debug(f"\n--- Main Agent Turn {turn_count} ---")
@@ -1014,6 +1137,16 @@ class Orchestrator:
                         status="failed",
                     )
                 task_failed = True  # Mark task as failed
+                main_failure_reason = "Main agent LLM call failed before producing a usable assistant message."
+
+                if not ran_main_tool_or_subagent:
+                    fallback_final_answer_text = await self._run_main_failure_fallback(
+                        task_description=task_description,
+                        keep_tool_result=keep_tool_result,
+                        failed_reason=main_failure_reason,
+                    )
+                    if fallback_final_answer_text:
+                        task_failed = False
                 break
 
             if (
@@ -1044,6 +1177,7 @@ class Orchestrator:
                 tool_name = call["tool_name"]
                 arguments = call["arguments"]
                 call_id = call["id"]
+                ran_main_tool_or_subagent = True
 
                 self._emit_tool_live_trace(
                     "tool_call",
@@ -1195,19 +1329,30 @@ class Orchestrator:
             )
 
         # Final summary
-        self.task_log.log_step("final_summary", "Generating final summary")
+        if fallback_final_answer_text:
+            self.task_log.log_step(
+                "final_summary",
+                "Using fallback sub-agent report as the final summary.",
+                "warning",
+            )
+            final_answer_text = fallback_final_answer_text
+            message_history.append(
+                {"role": "assistant", "content": final_answer_text}
+            )
+        else:
+            self.task_log.log_step("final_summary", "Generating final summary")
 
-        # Use context limit retry logic to generate final summary
-        final_answer_text = await self._handle_summary_with_context_limit_retry(
-            system_prompt,
-            main_agent_prompt_instance,
-            message_history,
-            tool_definitions,
-            "Final summary generation",
-            task_description,
-            task_failed,
-            agent_type="main",
-        )
+            # Use context limit retry logic to generate final summary
+            final_answer_text = await self._handle_summary_with_context_limit_retry(
+                system_prompt,
+                main_agent_prompt_instance,
+                message_history,
+                tool_definitions,
+                "Final summary generation",
+                task_description,
+                task_failed,
+                agent_type="main",
+            )
 
         # Handle response result
         if final_answer_text:

@@ -4,6 +4,7 @@
 
 import asyncio
 import dataclasses
+import json
 import os
 import tempfile
 from pathlib import Path
@@ -23,6 +24,72 @@ logger = bootstrap_logger(level=LOGGER_LEVEL)
 
 class CodexCliError(Exception):
     pass
+
+
+def _extract_text_from_codex_item(item: dict[str, Any]) -> str:
+    """Extract assistant text from known Codex JSON item shapes."""
+    item_type = item.get("type")
+    if item_type in {"agent_message", "assistant_message"}:
+        text = item.get("text")
+        if isinstance(text, str):
+            return text.strip()
+
+    content = item.get("content")
+    if isinstance(content, str):
+        return content.strip()
+    if isinstance(content, list):
+        parts = []
+        for block in content:
+            if isinstance(block, dict):
+                text = block.get("text")
+                if isinstance(text, str):
+                    parts.append(text)
+        return "\n".join(part for part in parts if part).strip()
+
+    return ""
+
+
+def extract_assistant_text_from_codex_json_events(
+    raw_text: str,
+) -> tuple[str, list[str]]:
+    """Parse Codex CLI --json output and return assistant text plus errors.
+
+    Codex writes newline-delimited JSON events, but local plugin/runtime warnings
+    can be interleaved with those events. This parser intentionally skips
+    non-JSON lines and only trusts completed assistant/agent message events.
+    """
+    assistant_messages: list[str] = []
+    errors: list[str] = []
+
+    for raw_line in (raw_text or "").splitlines():
+        line = raw_line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+
+        event_type = event.get("type")
+        if event_type == "item.completed":
+            item = event.get("item")
+            if isinstance(item, dict):
+                text = _extract_text_from_codex_item(item)
+                if text:
+                    assistant_messages.append(text)
+        elif event_type in {"error", "turn.failed"}:
+            message = event.get("message")
+            if message:
+                errors.append(str(message))
+            error = event.get("error")
+            if isinstance(error, dict):
+                error_message = error.get("message")
+                if error_message:
+                    errors.append(str(error_message))
+            elif error:
+                errors.append(str(error))
+
+    return "\n\n".join(assistant_messages).strip(), errors
 
 
 def _as_bool(value: Any) -> bool:
@@ -125,11 +192,14 @@ Important runtime rules:
         )
         prompt = self._build_codex_prompt(system_prompt, filtered_messages)
 
-        output_file = tempfile.NamedTemporaryFile(
-            prefix="miroflow-codex-", suffix=".txt", delete=False
-        )
-        output_path = Path(output_file.name)
-        output_file.close()
+        output_path: Path | None = None
+        if not self.codex_json_events:
+            output_file = tempfile.NamedTemporaryFile(
+                prefix="miroflow-codex-", suffix=".txt", delete=False
+            )
+            output_path = Path(output_file.name)
+            output_file.close()
+
         cmd = [self.codex_command]
         if self.codex_search:
             cmd.append("--search")
@@ -156,11 +226,11 @@ Important runtime rules:
                 self.model_name,
                 "-c",
                 f'model_reasoning_effort="{self.reasoning_effort}"',
-                "-o",
-                str(output_path),
                 "-",
             ]
         )
+        if output_path is not None:
+            cmd[-1:-1] = ["-o", str(output_path)]
         cmd = [
             str(part) for part in cmd
         ]
@@ -193,25 +263,36 @@ Important runtime rules:
 
         stdout_text = stdout.decode("utf-8", errors="replace")
         stderr_text = stderr.decode("utf-8", errors="replace")
-        if process.returncode != 0:
-            raise CodexCliError(
-                "Codex CLI failed with exit code "
-                f"{process.returncode}: {redact_secrets(stderr_text[-2000:])}"
-            )
 
         assistant_text = ""
-        if output_path.exists():
+        json_errors: list[str] = []
+        if self.codex_json_events:
+            assistant_text, json_errors = extract_assistant_text_from_codex_json_events(
+                "\n".join([stdout_text, stderr_text])
+            )
+
+        if process.returncode != 0:
+            event_error_text = "; ".join(json_errors[-3:])
+            error_tail = event_error_text or stderr_text[-2000:] or stdout_text[-2000:]
+            raise CodexCliError(
+                "Codex CLI failed with exit code "
+                f"{process.returncode}: {redact_secrets(error_tail)}"
+            )
+
+        if not assistant_text and output_path is not None and output_path.exists():
             assistant_text = output_path.read_text(encoding="utf-8").strip()
             try:
                 output_path.unlink()
             except OSError:
                 pass
-        if not assistant_text:
+        if not assistant_text and not self.codex_json_events:
             assistant_text = stdout_text.strip()
         if not assistant_text:
+            event_error_text = "; ".join(json_errors[-3:])
+            output_tail = "\n".join([stdout_text[-1000:], stderr_text[-1000:]]).strip()
             raise CodexCliError(
                 "Codex CLI returned no assistant message. "
-                f"stderr={redact_secrets(stderr_text[-2000:])}"
+                f"{redact_secrets(event_error_text or output_tail)}"
             )
 
         return SimpleNamespace(

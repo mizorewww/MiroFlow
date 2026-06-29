@@ -30,13 +30,16 @@ main_agent:
     codex_approval_policy: "${oc.env:CODEX_APPROVAL_POLICY,never}"
     codex_timeout: "${oc.env:CODEX_TIMEOUT,1800}"
     codex_ephemeral: true
-    codex_json_events: false
+    codex_json_events: true
     codex_skip_git_repo_check: "${oc.env:CODEX_SKIP_GIT_REPO_CHECK,false}"
     codex_search: false
 
   # Keep the slow, high-quality model focused on planning and synthesis.
   # It can delegate web research to either Serper/Jina or Codex web_search.
   tool_config: []
+  fallback_sub_agents:
+    - agent-worker
+    - agent-codex-search
 
   max_turns: 6
   max_tool_calls_per_turn: 2
@@ -108,7 +111,7 @@ sub_agents:
       codex_approval_policy: "${oc.env:CODEX_APPROVAL_POLICY,never}"
       codex_timeout: "${oc.env:CODEX_TIMEOUT,1800}"
       codex_ephemeral: true
-      codex_json_events: false
+      codex_json_events: true
       codex_skip_git_repo_check: "${oc.env:CODEX_SKIP_GIT_REPO_CHECK,false}"
       codex_search: true
 
