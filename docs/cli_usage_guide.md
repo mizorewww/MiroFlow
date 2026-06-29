@@ -269,7 +269,29 @@ benchmark.execution.max_tasks=10
 benchmark.execution.max_concurrent=2
 ```
 
-## 10. 评分和汇总
+## 10. 作为 MCP 调用
+
+当前 fork 也提供了一个固定配置的 MCP 封装：
+
+```text
+src.tool.mcp_servers.miroflow_research_mcp_server
+```
+
+它只暴露一个工具：`research(question, context="")`。调用方不能选择 MiroFlow 配置；配置名由环境变量控制：
+
+```bash
+MIROFLOW_MCP_CONFIG_NAME=agent_hybrid_codex_deepseek
+```
+
+工具配置文件是：
+
+```text
+config/tool/tool-miroflow-research.yaml
+```
+
+详细说明见 `docs/miroflow_research_mcp.md`。
+
+## 11. 评分和汇总
 
 已有 CLI 子命令：
 
@@ -282,7 +304,7 @@ uv run python main.py prepare-benchmark
 
 这些命令主要服务 benchmark/eval 流程。具体参数依赖对应 benchmark 数据和日志结构，日常单任务调试优先使用 `trace`。
 
-## 11. 推荐工作流
+## 12. 推荐工作流
 
 日常问答/搜索：
 
