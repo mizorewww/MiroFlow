@@ -16,6 +16,7 @@ from omegaconf import DictConfig
 
 
 from src.llm.provider_client_base import LLMProviderClientBase
+from src.logging.live_trace import emit_live_trace
 from src.llm.providers.claude_openrouter_client import ContextLimitError
 from src.logging.logger import bootstrap_logger
 from src.logging.task_tracer import TaskTracer
@@ -124,6 +125,54 @@ class Orchestrator:
         ):
             self.sub_agent_llm_client.task_log = task_log
 
+    def _emit_llm_live_trace(
+        self,
+        agent_type: str,
+        step_id: int,
+        purpose: str,
+        llm_client: LLMProviderClientBase,
+        response,
+        assistant_response_text: str | None,
+    ) -> None:
+        title = f"{agent_type} step {step_id}: {purpose}"
+        reasoning_text = llm_client.extract_reasoning_text(response)
+        if reasoning_text:
+            emit_live_trace("reasoning", f"{title} reasoning_content", reasoning_text)
+        if assistant_response_text:
+            emit_live_trace("assistant", f"{title} assistant", assistant_response_text)
+
+    def _emit_tool_live_trace(
+        self,
+        event: str,
+        agent_type: str,
+        turn_count: int,
+        server_name: str,
+        tool_name: str,
+        *,
+        call_id: str | None = None,
+        arguments: Any | None = None,
+        result: Any | None = None,
+        duration_ms: int | None = None,
+        error: str | None = None,
+    ) -> None:
+        payload: dict[str, Any] = {}
+        if call_id:
+            payload["call_id"] = call_id
+        if arguments is not None:
+            payload["arguments"] = arguments
+        if duration_ms is not None:
+            payload["duration_ms"] = duration_ms
+        if error:
+            payload["error"] = error
+        if result is not None:
+            payload["result"] = result
+
+        emit_live_trace(
+            event,
+            f"{agent_type} turn {turn_count}: {server_name}.{tool_name}",
+            payload,
+        )
+
     async def _handle_llm_call_with_logging(
         self,
         system_prompt,
@@ -194,6 +243,14 @@ class Orchestrator:
                     current_llm_client.process_llm_response(
                         response, message_history, agent_type
                     )
+                )
+                self._emit_llm_live_trace(
+                    agent_type,
+                    step_id,
+                    purpose,
+                    current_llm_client,
+                    response,
+                    assistant_response_text,
                 )
 
                 # Save message history after LLM response processing
@@ -521,6 +578,15 @@ class Orchestrator:
                     "sub_agent_tool_call_start",
                     f"Executing {tool_name} on {server_name}",
                 )
+                self._emit_tool_live_trace(
+                    "tool_call",
+                    sub_agent_name,
+                    turn_count,
+                    server_name,
+                    tool_name,
+                    call_id=call_id,
+                    arguments=arguments,
+                )
 
                 call_start_time = time.time()
                 try:
@@ -578,6 +644,17 @@ class Orchestrator:
                     tool_result
                 )
                 logger.debug(f"Tool result: {tool_result}")
+                self._emit_tool_live_trace(
+                    "tool_result",
+                    sub_agent_name,
+                    turn_count,
+                    server_name,
+                    tool_name,
+                    call_id=call_id,
+                    result=tool_result_for_llm.get("text", tool_result_for_llm),
+                    duration_ms=call_duration_ms,
+                    error=tool_result.get("error"),
+                )
 
                 all_tool_results_content_with_id.append((call_id, tool_result_for_llm))
 
@@ -599,6 +676,16 @@ class Orchestrator:
                 )
                 tool_result_for_llm = self.output_formatter.format_tool_result_for_user(
                     tool_result
+                )
+                self._emit_tool_live_trace(
+                    "tool_result",
+                    sub_agent_name,
+                    turn_count,
+                    "re-think",
+                    "re-think",
+                    result=tool_result_for_llm.get("text", tool_result_for_llm),
+                    duration_ms=0,
+                    error=tool_calls[1][0]["error"],
                 )
                 all_tool_results_content_with_id.append(("FAILED", tool_result_for_llm))
 
@@ -664,6 +751,11 @@ class Orchestrator:
             )
 
         logger.debug(f"Sub Agent {sub_agent_name} Final Answer: {final_answer_text}")
+        emit_live_trace(
+            "final",
+            f"Sub agent {sub_agent_name} final answer",
+            final_answer_text,
+        )
 
         self.task_log.sub_agent_message_history_sessions[
             self.task_log.current_sub_agent_session_id
@@ -879,6 +971,16 @@ Your objective is maximum completeness, transparency, and detailed documentation
                 arguments = call["arguments"]
                 call_id = call["id"]
 
+                self._emit_tool_live_trace(
+                    "tool_call",
+                    "main",
+                    turn_count,
+                    server_name,
+                    tool_name,
+                    call_id=call_id,
+                    arguments=arguments,
+                )
+
                 call_start_time = time.time()
                 try:
                     if server_name.startswith("agent-"):
@@ -944,6 +1046,17 @@ Your objective is maximum completeness, transparency, and detailed documentation
                 tool_result_for_llm = self.output_formatter.format_tool_result_for_user(
                     tool_result
                 )
+                self._emit_tool_live_trace(
+                    "tool_result",
+                    "main",
+                    turn_count,
+                    server_name,
+                    tool_name,
+                    call_id=call_id,
+                    result=tool_result_for_llm.get("text", tool_result_for_llm),
+                    duration_ms=call_duration_ms,
+                    error=tool_result.get("error"),
+                )
                 # all_tool_results_content.extend(tool_result_for_llm)  # Collect all tool results
                 all_tool_results_content_with_id.append((call_id, tool_result_for_llm))
 
@@ -965,6 +1078,16 @@ Your objective is maximum completeness, transparency, and detailed documentation
                 )
                 tool_result_for_llm = self.output_formatter.format_tool_result_for_user(
                     tool_result
+                )
+                self._emit_tool_live_trace(
+                    "tool_result",
+                    "main",
+                    turn_count,
+                    "re-think",
+                    "re-think",
+                    result=tool_result_for_llm.get("text", tool_result_for_llm),
+                    duration_ms=0,
+                    error=tool_calls[1][0]["error"],
                 )
                 all_tool_results_content_with_id.append(("FAILED", tool_result_for_llm))
 
@@ -1096,6 +1219,7 @@ Your objective is maximum completeness, transparency, and detailed documentation
             )
 
         logger.debug(f"LLM Final Answer: {final_answer_text}")
+        emit_live_trace("final", "Main agent final answer", final_answer_text)
 
         # Save final message history (including LLM processing results)
         self.task_log.main_agent_message_history = {

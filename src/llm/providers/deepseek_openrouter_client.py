@@ -146,6 +146,13 @@ class DeepSeekOpenRouterClient(LLMProviderClientBase):
                 "extra_body": extra_body,
             }
 
+            if self.reasoning_effort:
+                params["reasoning_effort"] = self.reasoning_effort
+
+            thinking_type = self.cfg.llm.get("thinking_type")
+            if thinking_type:
+                params["extra_body"]["thinking"] = {"type": str(thinking_type)}
+
             # Add optional parameters only if they have non-default values
             if self.top_p != 1.0:
                 params["top_p"] = self.top_p
@@ -234,9 +241,13 @@ class DeepSeekOpenRouterClient(LLMProviderClientBase):
             logger.error(f"Should never happen: {error_msg}")
             return "", True  # Exit loop
 
+        message = llm_response.choices[0].message
+        finish_reason = llm_response.choices[0].finish_reason
+        reasoning_content = self.extract_reasoning_text(llm_response)
+
         # Extract LLM response text
-        if llm_response.choices[0].finish_reason == "stop":
-            assistant_response_text = llm_response.choices[0].message.content or ""
+        if finish_reason == "stop":
+            assistant_response_text = message.content or ""
             # remove user: {...} content
             assistant_response_text = self._clean_user_content_from_response(
                 assistant_response_text
@@ -244,8 +255,8 @@ class DeepSeekOpenRouterClient(LLMProviderClientBase):
             message_history.append(
                 {"role": "assistant", "content": assistant_response_text}
             )
-        elif llm_response.choices[0].finish_reason == "length":
-            assistant_response_text = llm_response.choices[0].message.content or ""
+        elif finish_reason == "length":
+            assistant_response_text = message.content or ""
             if assistant_response_text == "":
                 assistant_response_text = "LLM response is empty. This is likely due to thinking block used up all tokens."
             else:
@@ -255,10 +266,11 @@ class DeepSeekOpenRouterClient(LLMProviderClientBase):
             message_history.append(
                 {"role": "assistant", "content": assistant_response_text}
             )
-        elif llm_response.choices[0].finish_reason == "tool_calls":
+        elif finish_reason == "tool_calls":
             # For tool_calls, we need to extract tool call information as text
-            tool_calls = llm_response.choices[0].message.tool_calls
-            assistant_response_text = llm_response.choices[0].message.content or ""
+            tool_calls = message.tool_calls or []
+            raw_assistant_content = message.content or ""
+            assistant_response_text = raw_assistant_content
 
             # If there's no text content, we generate a text describing the tool call
             if not assistant_response_text:
@@ -269,30 +281,28 @@ class DeepSeekOpenRouterClient(LLMProviderClientBase):
                     )
                 assistant_response_text = "\n".join(tool_call_descriptions)
 
-            message_history.append(
-                {
-                    "role": "assistant",
-                    "content": assistant_response_text,
-                    "tool_calls": [
-                        {
-                            "id": _.id,
-                            "type": "function",
-                            "function": {
-                                "name": _.function.name,
-                                "arguments": _.function.arguments,
-                            },
-                        }
-                        for _ in tool_calls
-                    ],
-                }
-            )
+            assistant_message = {
+                "role": "assistant",
+                "content": raw_assistant_content,
+                "tool_calls": [
+                    {
+                        "id": _.id,
+                        "type": "function",
+                        "function": {
+                            "name": _.function.name,
+                            "arguments": _.function.arguments,
+                        },
+                    }
+                    for _ in tool_calls
+                ],
+            }
+            if reasoning_content:
+                assistant_message["reasoning_content"] = reasoning_content
+            message_history.append(assistant_message)
         else:
-            logger.error(
-                f"Unsupported finish reason: {llm_response.choices[0].finish_reason}"
-            )
+            logger.error(f"Unsupported finish reason: {finish_reason}")
             assistant_response_text = (
-                "Successful response, but unsupported finish reason: "
-                + llm_response.choices[0].finish_reason
+                "Successful response, but unsupported finish reason: " + finish_reason
             )
             message_history.append(
                 {"role": "assistant", "content": assistant_response_text}
@@ -317,61 +327,26 @@ class DeepSeekOpenRouterClient(LLMProviderClientBase):
         self, message_history, tool_call_info, tool_calls_exceeded=False
     ):
         """Update message history with tool calls data (llm client specific)"""
-
-        # Filter tool call results with type "text"
-        tool_call_info = [item for item in tool_call_info if item[1]["type"] == "text"]
-
-        # Separate valid tool calls and bad tool calls
-        valid_tool_calls = [
-            (tool_id, content)
-            for tool_id, content in tool_call_info
-            if tool_id != "FAILED"
-        ]
-        bad_tool_calls = [
-            (tool_id, content)
-            for tool_id, content in tool_call_info
-            if tool_id == "FAILED"
-        ]
-
-        total_calls = len(valid_tool_calls) + len(bad_tool_calls)
-
-        # Build output text
-        output_parts = []
-
-        if total_calls > 1:
-            # Handling for multiple tool calls
-            # Add tool result description
-            if tool_calls_exceeded:
-                output_parts.append(
-                    f"You made too many tool calls. I can only afford to process {len(valid_tool_calls)} valid tool calls in this turn."
+        fallback_results = []
+        for cur_call_id, tool_result in tool_call_info:
+            if cur_call_id and cur_call_id != "FAILED":
+                message_history.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": cur_call_id,
+                        "content": tool_result["text"],
+                    }
                 )
-            else:
-                output_parts.append(
-                    f"I have processed {len(valid_tool_calls)} valid tool calls in this turn."
-                )
+            elif tool_result.get("type") == "text":
+                fallback_results.append(tool_result["text"])
 
-            # Output each valid tool call result according to format
-            for i, (tool_id, content) in enumerate(valid_tool_calls, 1):
-                output_parts.append(f"Valid tool call {i} result:\n{content['text']}")
-
-            # Output bad tool calls results
-            for i, (tool_id, content) in enumerate(bad_tool_calls, 1):
-                output_parts.append(f"Failed tool call {i} result:\n{content['text']}")
-        else:
-            # For single tool call, output result directly
-            for tool_id, content in valid_tool_calls:
-                output_parts.append(content["text"])
-            for tool_id, content in bad_tool_calls:
-                output_parts.append(content["text"])
-
-        merged_text = "\n\n".join(output_parts)
-
-        message_history.append(
-            {
-                "role": "user",
-                "content": [{"type": "text", "text": merged_text}],
-            }
-        )
+        if fallback_results:
+            message_history.append(
+                {
+                    "role": "user",
+                    "content": [{"type": "text", "text": "\n\n".join(fallback_results)}],
+                }
+            )
         return message_history
 
     def parse_llm_response(self, llm_response) -> str:

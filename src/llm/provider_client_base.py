@@ -264,6 +264,53 @@ class LLMProviderClientBase(ABC):
             return message_history[-keep_tool_result:]
         return message_history
 
+    @staticmethod
+    def _read_response_field(obj, field_name: str):
+        if obj is None:
+            return None
+
+        value = getattr(obj, field_name, None)
+        if value is not None:
+            return value
+
+        model_extra = getattr(obj, "model_extra", None)
+        if isinstance(model_extra, dict) and model_extra.get(field_name) is not None:
+            return model_extra[field_name]
+
+        for method_name in ("model_dump", "to_dict"):
+            method = getattr(obj, method_name, None)
+            if callable(method):
+                try:
+                    data = method()
+                except Exception:
+                    continue
+                if isinstance(data, dict) and data.get(field_name) is not None:
+                    return data[field_name]
+
+        return None
+
+    def extract_reasoning_text(self, llm_response) -> str:
+        """Extract provider-returned visible reasoning text when the API exposes it."""
+        try:
+            choices = getattr(llm_response, "choices", None) or []
+            if not choices:
+                return ""
+
+            choice = choices[0]
+            message = getattr(choice, "message", None)
+            reasoning = self._read_response_field(message, "reasoning_content")
+            if reasoning is None:
+                reasoning = self._read_response_field(choice, "reasoning_content")
+
+            if reasoning is None:
+                return ""
+            if isinstance(reasoning, str):
+                return reasoning
+            return json.dumps(reasoning, ensure_ascii=False, default=str)
+        except Exception as e:
+            logger.debug(f"Failed to extract reasoning text: {e}")
+            return ""
+
     def _format_response_for_log(self, response) -> Dict:
         """Format response for logging"""
         if not response:

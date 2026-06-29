@@ -4,6 +4,7 @@
 
 import asyncio
 import logging
+import os
 import pathlib
 from pathlib import Path
 import dotenv
@@ -26,7 +27,15 @@ async def single_task(
     task_file_name: str = "",
 ) -> None:
     """Asynchrono us main function."""
-    debug_config(cfg, logger)
+    if os.getenv("MIROFLOW_PRINT_CONFIG", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }:
+        debug_config(cfg, logger)
+    else:
+        logger.debug("Skipping full config dump; set MIROFLOW_PRINT_CONFIG=1 to show it.")
     logs_dir = Path(cfg.output_dir)
     main_agent_tool_manager, sub_agent_tool_managers, output_formatter = (
         create_pipeline_components(cfg, logs_dir=str(logs_dir))
@@ -71,7 +80,9 @@ def main(
     dotenv.load_dotenv()
     with hydra.initialize_config_dir(config_dir=config_path(), version_base=None):
         cfg = hydra.compose(config_name=chosen_config_name, overrides=list(args))
-        logger = bootstrap_logger(level="DEBUG", to_console=True)
+        logger = bootstrap_logger(
+            level=os.getenv("LOGGER_LEVEL", "INFO"), to_console=True
+        )
 
         # Test if logger is working
         logger.info("Logger initialized successfully")
