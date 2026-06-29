@@ -8,7 +8,7 @@ import os
 import sys
 import time
 import uuid
-from typing import Any, Optional
+from typing import Any
 import importlib
 from config.agent_prompts.base_agent_prompt import BaseAgentPrompt
 
@@ -87,14 +87,26 @@ class Orchestrator:
         output_formatter: OutputFormatter,
         cfg: DictConfig,
         task_log: TaskTracer,
-        sub_agent_llm_client: Optional[LLMProviderClientBase] = None,
+        sub_agent_llm_client: (
+            LLMProviderClientBase | dict[str, LLMProviderClientBase] | None
+        ) = None,
     ):
         self.main_agent_tool_manager = main_agent_tool_manager
         self.sub_agent_tool_managers = sub_agent_tool_managers
         self.llm_client = llm_client
-        self.sub_agent_llm_client = (
-            sub_agent_llm_client or llm_client
-        )  # Use client from main agent if not provided
+        if isinstance(sub_agent_llm_client, dict):
+            self.sub_agent_llm_clients = sub_agent_llm_client
+            self.sub_agent_llm_client = next(
+                iter(sub_agent_llm_client.values()), llm_client
+            )
+        elif sub_agent_llm_client is not None:
+            self.sub_agent_llm_clients = {
+                name: sub_agent_llm_client for name in sub_agent_tool_managers
+            }
+            self.sub_agent_llm_client = sub_agent_llm_client
+        else:
+            self.sub_agent_llm_clients = {}
+            self.sub_agent_llm_client = llm_client
         self.output_formatter = output_formatter
         self.cfg = cfg
         self.task_log = task_log
@@ -115,15 +127,21 @@ class Orchestrator:
             f"add_message_id config value: {add_message_id_val} (type: {type(add_message_id_val)}) -> parsed as: {self.add_message_id}"
         )
 
-        # Pass task_log to llm_client
+        # Pass task_log to every distinct LLM client.
         if self.llm_client and task_log:
             self.llm_client.task_log = task_log
-        if (
-            self.sub_agent_llm_client
-            and task_log
-            and self.sub_agent_llm_client != self.llm_client
-        ):
-            self.sub_agent_llm_client.task_log = task_log
+        seen_client_ids = set()
+        for client in self.sub_agent_llm_clients.values():
+            if id(client) in seen_client_ids:
+                continue
+            seen_client_ids.add(id(client))
+            if client and task_log and client != self.llm_client:
+                client.task_log = task_log
+
+    def _get_llm_client(self, agent_type: str) -> LLMProviderClientBase:
+        if agent_type == "main":
+            return self.llm_client
+        return self.sub_agent_llm_clients.get(agent_type, self.sub_agent_llm_client)
 
     def _emit_llm_live_trace(
         self,
@@ -189,9 +207,7 @@ class Orchestrator:
         """
 
         # Select correct LLM client based on agent_type
-        current_llm_client = (
-            self.llm_client if agent_type == "main" else self.sub_agent_llm_client
-        )
+        current_llm_client = self._get_llm_client(agent_type)
 
         # Add message ID to user messages (if configured and message doesn't have ID yet)
         if self.add_message_id:
@@ -357,9 +373,7 @@ class Orchestrator:
             )
 
             # Handle merging of message history and summary prompt
-            current_llm_client = (
-                self.llm_client if agent_type == "main" else self.sub_agent_llm_client
-            )
+            current_llm_client = self._get_llm_client(agent_type)
             summary_prompt = current_llm_client.handle_max_turns_reached_summary_prompt(
                 message_history, summary_prompt
             )
@@ -448,8 +462,10 @@ class Orchestrator:
         # Start new sub-agent session
         self.task_log.start_sub_agent_session(sub_agent_name, task_description)
 
+        sub_agent_llm_client = self._get_llm_client(sub_agent_name)
+
         # Reset sub-agent usage stats for independent tracking
-        self.sub_agent_llm_client.reset_usage_stats()
+        sub_agent_llm_client.reset_usage_stats()
 
         # Simplified initial user content (no file attachments)
         initial_user_content = [{"type": "text", "text": task_description}]
@@ -490,6 +506,7 @@ class Orchestrator:
         turn_count = 0
         all_tool_results_content_with_id = []
         task_failed = False  # Track whether task failed
+        reached_turn_limit = False
 
         while turn_count < max_turns:
             turn_count += 1
@@ -689,9 +706,11 @@ class Orchestrator:
                 )
                 all_tool_results_content_with_id.append(("FAILED", tool_result_for_llm))
 
-            message_history = self.sub_agent_llm_client.update_message_history(
+            message_history = sub_agent_llm_client.update_message_history(
                 message_history, all_tool_results_content_with_id, tool_calls_exceeded
             )
+        else:
+            reached_turn_limit = True
 
         # Continue execution
         logger.debug(
@@ -699,7 +718,7 @@ class Orchestrator:
         )
 
         # Record browser agent loop end
-        if turn_count >= max_turns:
+        if reached_turn_limit:
             if (
                 not task_failed
             ):  # If not yet marked as failed and due to turn limit exceeded
@@ -763,7 +782,7 @@ class Orchestrator:
         self.task_log.save()
 
         # Record sub-agent cumulative usage
-        usage_log = self.sub_agent_llm_client.get_usage_log()
+        usage_log = sub_agent_llm_client.get_usage_log()
         self.task_log.log_step(
             "usage_calculation",
             usage_log,
@@ -899,6 +918,7 @@ Your objective is maximum completeness, transparency, and detailed documentation
             max_turns = sys.maxsize
         turn_count = 0
         task_failed = False  # Track whether task failed
+        reached_turn_limit = False
         while turn_count < max_turns:
             turn_count += 1
             logger.debug(f"\n--- Main Agent Turn {turn_count} ---")
@@ -984,8 +1004,13 @@ Your objective is maximum completeness, transparency, and detailed documentation
                 call_start_time = time.time()
                 try:
                     if server_name.startswith("agent-"):
+                        subtask = (
+                            arguments.get("subtask")
+                            if isinstance(arguments, dict)
+                            else str(arguments)
+                        )
                         sub_agent_result = await self.run_sub_agent(
-                            server_name, str(arguments), keep_tool_result
+                            server_name, subtask or str(arguments), keep_tool_result
                         )
                         tool_result = {
                             "server_name": server_name,
@@ -1095,9 +1120,11 @@ Your objective is maximum completeness, transparency, and detailed documentation
             message_history = self.llm_client.update_message_history(
                 message_history, all_tool_results_content_with_id, tool_calls_exceeded
             )
+        else:
+            reached_turn_limit = True
 
         # Record main loop end
-        if turn_count >= max_turns:
+        if reached_turn_limit:
             if (
                 not task_failed
             ):  # If not yet marked as failed and due to turn limit exceeded

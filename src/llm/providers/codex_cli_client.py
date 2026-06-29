@@ -52,6 +52,7 @@ class CodexCliClient(LLMProviderClientBase):
         self.codex_workdir = self.cfg.llm.get("codex_workdir", os.getcwd())
         self.codex_ephemeral = _as_bool(self.cfg.llm.get("codex_ephemeral", True))
         self.codex_json_events = _as_bool(self.cfg.llm.get("codex_json_events", False))
+        self.codex_search = _as_bool(self.cfg.llm.get("codex_search", False))
 
     def _content_to_text(self, content: Any) -> str:
         if content is None:
@@ -85,6 +86,11 @@ class CodexCliClient(LLMProviderClientBase):
         self, system_prompt: str, messages: List[Dict[str, Any]]
     ) -> str:
         conversation = self._format_message_history(messages)
+        native_search_rule = (
+            "- Codex native web_search is enabled. Use it internally when current web evidence is needed; do not emit a MiroFlow XML tool call for native web_search."
+            if self.codex_search
+            else "- Codex native web_search is disabled for this turn."
+        )
         return f"""You are acting as the next assistant turn inside the MiroFlow agent runtime.
 
 Important runtime rules:
@@ -92,6 +98,7 @@ Important runtime rules:
 - Do not inspect or edit local files unless the MiroFlow prompt explicitly asks you to call a tool.
 - If you need a MiroFlow tool, output exactly one `<use_mcp_tool>...</use_mcp_tool>` block that follows the system prompt format, then stop.
 - If no tool is needed, answer directly.
+{native_search_rule}
 
 # MiroFlow System Prompt
 {system_prompt}
@@ -120,27 +127,38 @@ Important runtime rules:
         )
         output_path = Path(output_file.name)
         output_file.close()
-        cmd = [
-            self.codex_command,
-            "--ask-for-approval",
-            self.codex_approval_policy,
-            "exec",
-            "--sandbox",
-            self.codex_sandbox,
-            "--cd",
-            self.codex_workdir,
-            "-m",
-            self.model_name,
-            "-c",
-            f'model_reasoning_effort="{self.reasoning_effort}"',
-            "-o",
-            str(output_path),
-            "-",
-        ]
-        if self.codex_ephemeral:
-            cmd.insert(4, "--ephemeral")
+        cmd = [self.codex_command]
+        if self.codex_search:
+            cmd.append("--search")
+        cmd.extend(
+            [
+                "--ask-for-approval",
+                self.codex_approval_policy,
+                "exec",
+            ]
+        )
         if self.codex_json_events:
-            cmd.insert(4, "--json")
+            cmd.append("--json")
+        if self.codex_ephemeral:
+            cmd.append("--ephemeral")
+        cmd.extend(
+            [
+                "--sandbox",
+                self.codex_sandbox,
+                "--cd",
+                self.codex_workdir,
+                "-m",
+                self.model_name,
+                "-c",
+                f'model_reasoning_effort="{self.reasoning_effort}"',
+                "-o",
+                str(output_path),
+                "-",
+            ]
+        )
+        cmd = [
+            str(part) for part in cmd
+        ]
 
         env = os.environ.copy()
         if self.codex_home:

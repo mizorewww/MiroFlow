@@ -31,12 +31,13 @@ main_agent:
     codex_timeout: "${oc.env:CODEX_TIMEOUT,1800}"
     codex_ephemeral: true
     codex_json_events: false
+    codex_search: false
 
   # Keep the slow, high-quality model focused on planning and synthesis.
-  # It can delegate current web research to agent-worker.
+  # It can delegate web research to either Serper/Jina or Codex web_search.
   tool_config: []
 
-  max_turns: 4
+  max_turns: 6
   max_tool_calls_per_turn: 2
 
   input_process:
@@ -79,6 +80,37 @@ sub_agents:
 
     max_turns: 4
     max_tool_calls_per_turn: 4
+
+  agent-codex-search:
+    prompt_class: SubAgentCodexWebSearchPrompt
+    llm:
+      provider_class: "CodexCliClient"
+      model_name: "gpt-5.5"
+      async_client: true
+      temperature: 1.0
+      top_p: 1.0
+      min_p: 0.0
+      top_k: -1
+      reasoning_effort: xhigh
+      max_tokens: 128000
+      openrouter_provider: null
+      disable_cache_control: true
+      keep_tool_result: -1
+      oai_tool_thinking: false
+      codex_command: "${oc.env:CODEX_COMMAND,codex}"
+      codex_home: "${oc.env:CODEX_HOME,.local/codex-home}"
+      codex_workdir: "${oc.env:CODEX_WORKDIR,.}"
+      codex_sandbox: "${oc.env:CODEX_SANDBOX,read-only}"
+      codex_approval_policy: "${oc.env:CODEX_APPROVAL_POLICY,never}"
+      codex_timeout: "${oc.env:CODEX_TIMEOUT,1800}"
+      codex_ephemeral: true
+      codex_json_events: false
+      codex_search: true
+
+    tool_config: []
+
+    max_turns: 1
+    max_tool_calls_per_turn: 1
 
 
 output_dir: logs/

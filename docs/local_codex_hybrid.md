@@ -9,6 +9,7 @@ on worker duties.
 - Baseline local changes were committed before this work as
   `0c51504 feat: configure deepseek and live tracing`.
 - `origin` now points to `git@github.com:mizorewww/MiroFlow.git`.
+- Local `main` tracks `origin/main`, so plain `git push` pushes to the fork.
 - The original project remote is kept as `upstream`:
   `git@github.com:MiroMindAI/MiroFlow.git`.
 
@@ -43,6 +44,8 @@ Useful overrides:
 - `CODEX_SANDBOX`: Codex sandbox, default `read-only`
 - `CODEX_APPROVAL_POLICY`: Codex approval policy, default `never`
 - `CODEX_TIMEOUT`: per-turn timeout in seconds, default `1800`
+- `codex_search`: config flag that adds Codex CLI `--search`, enabling native
+  Responses `web_search` for that Codex turn
 
 ## Recommended Agent Split
 
@@ -50,13 +53,18 @@ Use `config/agent_hybrid_codex_deepseek.yaml` for hybrid runs.
 
 - Main agent: `CodexCliClient`, `gpt-5.5`, `xhigh`
   - Role: instruction following, delegation, synthesis, final report.
-  - Tool access: only the `agent-worker` sub-agent.
+  - Tool access: `agent-worker` and `agent-codex-search`.
 - `agent-worker`: `DeepSeekOpenRouterClient`, `deepseek-v4-pro`
-  - Role: fast web research and page reading.
+  - Role: fast Serper/Jina web research and page reading.
   - Tools: `tool-reading`, `tool-searching`.
+- `agent-codex-search`: `CodexCliClient`, `gpt-5.5`, `xhigh`, `codex_search: true`
+  - Role: independent web research through Codex native `web_search`.
+  - Tools: no MiroFlow MCP tools; Codex performs native web searches internally.
 
 This keeps slow high-quality reasoning out of repeated web-search loops and
-uses DeepSeek for the latency-sensitive search/read work.
+uses DeepSeek for latency-sensitive search/read work. When source quality or
+search disagreement matters, the main agent can call both research components
+and synthesize the stronger evidence.
 
 ## Markdown Export
 

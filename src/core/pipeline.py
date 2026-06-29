@@ -70,7 +70,7 @@ async def execute_task_pipeline(
     )
 
     main_agent_llm_client = None
-    sub_agent_llm_client = None
+    sub_agent_llm_clients = {}
     final_answer, final_boxed_answer = "", ""
     try:
         # Initialize main agent LLM client
@@ -87,17 +87,17 @@ async def execute_task_pipeline(
         # Initialize sub agent LLM client
         # Require agent-specific LLM configuration for sub-agents
         if cfg.sub_agents is not None and cfg.sub_agents:
-            first_sub_agent = next(iter(cfg.sub_agents.values()))
-            if hasattr(first_sub_agent, "llm") and first_sub_agent.llm is not None:
-                sub_agent_llm_client = LLMClient(
-                    task_id=f"{task_id}_sub", llm_config=first_sub_agent.llm
-                )
-            else:
-                raise ValueError(
-                    "No LLM configuration found in sub-agent. Please ensure the agent configuration includes an LLM section."
-                )
+            for sub_agent_name, sub_agent in cfg.sub_agents.items():
+                if hasattr(sub_agent, "llm") and sub_agent.llm is not None:
+                    sub_agent_llm_clients[sub_agent_name] = LLMClient(
+                        task_id=f"{task_id}_{sub_agent_name}",
+                        llm_config=sub_agent.llm,
+                    )
+                else:
+                    raise ValueError(
+                        f"No LLM configuration found in sub-agent {sub_agent_name}. Please ensure the agent configuration includes an LLM section."
+                    )
         else:
-            sub_agent_llm_client = None
             logger.info("No sub agents defined, using main agent only for the task")
 
         # Initialize orchestrator
@@ -105,7 +105,7 @@ async def execute_task_pipeline(
             main_agent_tool_manager=main_agent_tool_manager,
             sub_agent_tool_managers=sub_agent_tool_managers,
             llm_client=main_agent_llm_client,
-            sub_agent_llm_client=sub_agent_llm_client,
+            sub_agent_llm_client=sub_agent_llm_clients,
             output_formatter=output_formatter,
             task_log=task_log,
             cfg=cfg,
@@ -139,11 +139,13 @@ async def execute_task_pipeline(
     finally:
         if main_agent_llm_client is not None:
             main_agent_llm_client.close()
-        if (
-            sub_agent_llm_client != main_agent_llm_client
-            and sub_agent_llm_client is not None
-        ):
-            sub_agent_llm_client.close()
+        seen_client_ids = set()
+        for sub_agent_llm_client in sub_agent_llm_clients.values():
+            if id(sub_agent_llm_client) in seen_client_ids:
+                continue
+            seen_client_ids.add(id(sub_agent_llm_client))
+            if sub_agent_llm_client != main_agent_llm_client:
+                sub_agent_llm_client.close()
         task_log.end_time = datetime.now()
 
         # Record task summary to structured log
