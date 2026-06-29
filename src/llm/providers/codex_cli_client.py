@@ -53,6 +53,9 @@ class CodexCliClient(LLMProviderClientBase):
         self.codex_ephemeral = _as_bool(self.cfg.llm.get("codex_ephemeral", True))
         self.codex_json_events = _as_bool(self.cfg.llm.get("codex_json_events", False))
         self.codex_search = _as_bool(self.cfg.llm.get("codex_search", False))
+        self.codex_skip_git_repo_check = _as_bool(
+            self.cfg.llm.get("codex_skip_git_repo_check", False)
+        )
 
     def _content_to_text(self, content: Any) -> str:
         if content is None:
@@ -139,6 +142,8 @@ Important runtime rules:
         )
         if self.codex_json_events:
             cmd.append("--json")
+        if self.codex_skip_git_repo_check:
+            cmd.append("--skip-git-repo-check")
         if self.codex_ephemeral:
             cmd.append("--ephemeral")
         cmd.extend(

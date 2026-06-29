@@ -18,6 +18,7 @@ env:
   CODEX_SANDBOX: "${oc.env:CODEX_SANDBOX,read-only}"
   CODEX_APPROVAL_POLICY: "${oc.env:CODEX_APPROVAL_POLICY,never}"
   CODEX_TIMEOUT: "${oc.env:CODEX_TIMEOUT,1800}"
+  CODEX_SKIP_GIT_REPO_CHECK: "${oc.env:CODEX_SKIP_GIT_REPO_CHECK,false}"
 
   DEEPSEEK_API_KEY: "${oc.env:DEEPSEEK_API_KEY,''}"
   DEEPSEEK_BASE_URL: "${oc.env:DEEPSEEK_BASE_URL,https://api.deepseek.com}"

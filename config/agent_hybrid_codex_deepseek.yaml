@@ -31,6 +31,7 @@ main_agent:
     codex_timeout: "${oc.env:CODEX_TIMEOUT,1800}"
     codex_ephemeral: true
     codex_json_events: false
+    codex_skip_git_repo_check: "${oc.env:CODEX_SKIP_GIT_REPO_CHECK,false}"
     codex_search: false
 
   # Keep the slow, high-quality model focused on planning and synthesis.
@@ -108,6 +109,7 @@ sub_agents:
       codex_timeout: "${oc.env:CODEX_TIMEOUT,1800}"
       codex_ephemeral: true
       codex_json_events: false
+      codex_skip_git_repo_check: "${oc.env:CODEX_SKIP_GIT_REPO_CHECK,false}"
       codex_search: true
 
     tool_config: []

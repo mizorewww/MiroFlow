@@ -44,6 +44,8 @@ Useful overrides:
 - `CODEX_SANDBOX`: Codex sandbox, default `read-only`
 - `CODEX_APPROVAL_POLICY`: Codex approval policy, default `never`
 - `CODEX_TIMEOUT`: per-turn timeout in seconds, default `1800`
+- `CODEX_SKIP_GIT_REPO_CHECK`: set to `true` for packaged deployments without
+  a `.git` directory, default `false`
 - `codex_search`: config flag that adds Codex CLI `--search`, enabling native
   Responses `web_search` for that Codex turn
 
