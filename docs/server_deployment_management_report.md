@@ -169,12 +169,15 @@ config/tool/tool-miroflow-research.yaml
 MCP 工具行为：
 
 1. 接收 `question` 和可选 `context`。
-2. 生成内部 task id。
-3. 调用 `main.py trace`。
-4. 使用固定配置运行 MiroFlow Agent。
-5. 读取生成的 Markdown 报告。
-6. 将完整 Markdown 内容返回给 MCP 调用方。
-7. 同时保留本次任务的 JSON trace、Markdown、stdout 和 stderr 诊断日志。
+2. 如果已有 `research` 任务正在运行，先终止旧任务的整个进程组，并为旧任务写入 superseded Markdown 报告。
+3. 生成新的内部 task id。
+4. 调用 `main.py trace`。
+5. 使用固定配置运行 MiroFlow Agent。
+6. 读取生成的 Markdown 报告。
+7. 将完整 Markdown 内容返回给 MCP 调用方。
+8. 同时保留本次任务的 JSON trace、Markdown、stdout 和 stderr 诊断日志。
+
+当前 HTTP MCP 服务是抢占式单任务模型：同一时间只允许一个 `research` 任务运行。新请求会立即取代旧请求，而不是排队等待。这是为了避免客户端连接断开或自动重试时堆出多个长任务。
 
 当前固定 Agent 配置：
 

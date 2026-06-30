@@ -4,6 +4,7 @@
 
 import argparse
 import asyncio
+from dataclasses import dataclass
 from datetime import datetime
 import os
 from pathlib import Path
@@ -24,6 +25,21 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 dotenv.load_dotenv(REPO_ROOT / ".env")
 setup_mcp_logging(tool_name=os.path.basename(__file__))
 mcp = FastMCP("miroflow-research-mcp-server")
+
+
+@dataclass
+class ActiveResearchTask:
+    task_id: str
+    question: str
+    context: str
+    report_path: Path
+    stdout_path: Path
+    stderr_path: Path
+    process: asyncio.subprocess.Process
+
+
+_ACTIVE_TASK_LOCK = asyncio.Lock()
+_ACTIVE_TASK: ActiveResearchTask | None = None
 
 
 def _env(name: str, default: str) -> str:
@@ -128,6 +144,40 @@ async def _terminate_process_group(process: asyncio.subprocess.Process) -> None:
     await process.wait()
 
 
+async def _cancel_active_task_locked(
+    *, replacement_task_id: str, reason: str
+) -> None:
+    """Cancel the active task while _ACTIVE_TASK_LOCK is held."""
+    global _ACTIVE_TASK
+
+    active_task = _ACTIVE_TASK
+    if active_task is None:
+        return
+
+    if active_task.process.returncode is not None:
+        _ACTIVE_TASK = None
+        return
+
+    await _terminate_process_group(active_task.process)
+
+    markdown = _error_markdown(
+        task_id=active_task.task_id,
+        question=active_task.question,
+        context=active_task.context,
+        message=(
+            f"{reason} The previous task was stopped because a newer MCP "
+            f"research task started: {replacement_task_id}."
+        ),
+        stdout=_read_tail(active_task.stdout_path),
+        stderr=_read_tail(active_task.stderr_path),
+        report_path=active_task.report_path,
+        stdout_path=active_task.stdout_path,
+        stderr_path=active_task.stderr_path,
+    )
+    _safe_write_report(active_task.report_path, markdown)
+    _ACTIVE_TASK = None
+
+
 def _error_markdown(
     *,
     task_id: str,
@@ -188,6 +238,8 @@ def _error_markdown(
 
 
 async def _run_trace(question: str, context: str = "") -> str:
+    global _ACTIVE_TASK
+
     task = _build_task(question, context)
     task_id = _task_id()
     config_name = _config_name()
@@ -214,14 +266,29 @@ async def _run_trace(question: str, context: str = "") -> str:
     ]
 
     with stdout_path.open("ab") as stdout_file, stderr_path.open("ab") as stderr_file:
-        process = await asyncio.create_subprocess_exec(
-            *cmd,
-            cwd=str(REPO_ROOT),
-            env=env,
-            stdout=stdout_file,
-            stderr=stderr_file,
-            start_new_session=True,
-        )
+        async with _ACTIVE_TASK_LOCK:
+            await _cancel_active_task_locked(
+                replacement_task_id=task_id,
+                reason="Only one MiroFlow MCP research task may run at a time.",
+            )
+
+            process = await asyncio.create_subprocess_exec(
+                *cmd,
+                cwd=str(REPO_ROOT),
+                env=env,
+                stdout=stdout_file,
+                stderr=stderr_file,
+                start_new_session=True,
+            )
+            _ACTIVE_TASK = ActiveResearchTask(
+                task_id=task_id,
+                question=question,
+                context=context,
+                report_path=report_path,
+                stdout_path=stdout_path,
+                stderr_path=stderr_path,
+                process=process,
+            )
 
         try:
             await asyncio.wait_for(process.wait(), timeout=_timeout_seconds())
@@ -255,6 +322,10 @@ async def _run_trace(question: str, context: str = "") -> str:
             )
             _safe_write_report(report_path, markdown)
             raise
+        finally:
+            async with _ACTIVE_TASK_LOCK:
+                if _ACTIVE_TASK is not None and _ACTIVE_TASK.task_id == task_id:
+                    _ACTIVE_TASK = None
 
     stdout_text = _read_tail(stdout_path)
     stderr_text = _read_tail(stderr_path)

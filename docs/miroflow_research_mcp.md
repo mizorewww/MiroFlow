@@ -101,6 +101,12 @@ main.py trace --config_file_name=$MIROFLOW_MCP_CONFIG_NAME
 
 then returns the Markdown report content.
 
+The HTTP MCP server is intentionally single-task and preemptive: only one
+`research` task may run at a time. When a new `research` request arrives while
+another task is still running, the server stops the old task process group,
+writes a superseded-task Markdown report for the old task, and starts the new
+task immediately.
+
 Each `research` call also stores task-level diagnostics next to the normal
 Markdown and JSON trace:
 
