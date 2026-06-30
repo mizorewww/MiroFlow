@@ -138,6 +138,12 @@ MiroFlow MCP HTTP 服务入口脚本：
 scripts/run_miroflow_research_mcp_http.sh
 ```
 
+Homebrew service 使用带自动重启的 supervisor 入口：
+
+```text
+scripts/run_miroflow_research_mcp_http_supervised.sh
+```
+
 脚本实际启动：
 
 ```bash
@@ -168,6 +174,7 @@ MCP 工具行为：
 4. 使用固定配置运行 MiroFlow Agent。
 5. 读取生成的 Markdown 报告。
 6. 将完整 Markdown 内容返回给 MCP 调用方。
+7. 同时保留本次任务的 JSON trace、Markdown、stdout 和 stderr 诊断日志。
 
 当前固定 Agent 配置：
 
@@ -198,6 +205,8 @@ MIROFLOW_MCP_TIMEOUT=3600
 MIROFLOW_MCP_HOST=127.0.0.1
 MIROFLOW_MCP_PORT=8766
 MIROFLOW_MCP_PATH=/mcp
+MIROFLOW_MCP_SERVICE_LOG_DIR=logs/mcp_http_service
+MIROFLOW_MCP_RESTART_DELAY=5
 CODEX_SKIP_GIT_REPO_CHECK=true
 LOGGER_LEVEL=ERROR
 UV_CACHE_DIR=/tmp/miroflow-uv-cache
@@ -208,13 +217,39 @@ UV_CACHE_DIR=/tmp/miroflow-uv-cache
 - `MIROFLOW_MCP_CONFIG_NAME` 决定 MCP 后端使用哪个 MiroFlow 配置。
 - `MIROFLOW_MCP_HOST=127.0.0.1` 表示 MiroFlow 不直接对外暴露。
 - `MIROFLOW_MCP_PORT=8766` 是内部 MCP HTTP 端口。
+- `MIROFLOW_MCP_SERVICE_LOG_DIR` 是 supervisor 和 MCP server 进程日志目录。
+- `MIROFLOW_MCP_RESTART_DELAY` 是 MCP server 子进程异常退出后的重启等待秒数。
 - `CODEX_SKIP_GIT_REPO_CHECK=true` 是打包部署场景的必要项。因为远端部署包不一定包含 `.git` 目录，Codex 默认会拒绝在未信任目录运行。
 
-MiroFlow 服务日志：
+Homebrew/launchd 层日志：
 
 ```text
 /tmp/miroflow_mcp_http.homebrew.log
 /tmp/miroflow_mcp_http.homebrew.err.log
+```
+
+MiroFlow supervisor 层日志：
+
+```text
+/Users/aac6fef/Developers/MiroFlow/logs/mcp_http_service/supervisor.log
+/Users/aac6fef/Developers/MiroFlow/logs/mcp_http_service/current.stdout.log
+/Users/aac6fef/Developers/MiroFlow/logs/mcp_http_service/current.stderr.log
+```
+
+每次 MCP server 子进程启动都会生成一组按时间命名的日志：
+
+```text
+logs/mcp_http_service/server_<timestamp>_<pid>.stdout.log
+logs/mcp_http_service/server_<timestamp>_<pid>.stderr.log
+```
+
+每次 `research` 调用还会保存任务级诊断日志：
+
+```text
+logs/mcp_http_hybrid/<task_id>.md
+logs/mcp_http_hybrid/<task_id>.log
+logs/mcp_http_hybrid/<task_id>.stdout.log
+logs/mcp_http_hybrid/<task_id>.stderr.log
 ```
 
 ## 6. Caddy 反向代理
@@ -473,6 +508,8 @@ brew services info caddy
 ```bash
 tail -n 100 /tmp/miroflow_mcp_http.homebrew.err.log
 tail -n 100 /tmp/miroflow_mcp_http.homebrew.log
+tail -n 100 /Users/aac6fef/Developers/MiroFlow/logs/mcp_http_service/supervisor.log
+tail -n 100 /Users/aac6fef/Developers/MiroFlow/logs/mcp_http_service/current.stderr.log
 ```
 
 查看端口：
@@ -525,9 +562,9 @@ curl -i http://127.0.0.1:8080/mcp/mirrorflow/mcp
 
 常见问题：
 
+- `MCP error -32000: Connection closed`：先确认 service 是否已被拉起：`brew services info miroflow-mcp`。再查看 `logs/mcp_http_service/supervisor.log` 是否出现 `server exited unexpectedly`，并查看对应的 `server_<timestamp>_<pid>.stderr.log`。如果是某次任务导致连接断开，继续看 `logs/mcp_http_hybrid/<task_id>.stdout.log` 和 `.stderr.log`。
 - `Not inside a trusted directory`：确认 `CODEX_SKIP_GIT_REPO_CHECK=true`。
 - `address already in use`：说明端口已有旧进程，先停掉旧服务或检查 `lsof`。
 - `onnxruntime` 安装失败：确认 `.python-version` 是 `3.13`，删除 `.venv` 后重新 `uv sync --python 3.13`。
 - Caddy 路径异常：检查 `/mcp/mirrorflow/mcp` 是否被改写到 `/mcp/`。
 - MCP 工具列表为空：先直连 `127.0.0.1:8766/mcp/`，再检查 Caddy 反代。
-

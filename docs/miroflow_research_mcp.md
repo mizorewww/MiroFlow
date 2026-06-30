@@ -55,6 +55,8 @@ MIROFLOW_MCP_OUTPUT_DIR=logs/mcp
 MIROFLOW_MCP_TIMEOUT=3600
 MIROFLOW_MCP_LOGGER_LEVEL=ERROR
 MIROFLOW_MCP_UV_CACHE_DIR=/private/tmp/miroflow-uv-cache
+MIROFLOW_MCP_SERVICE_LOG_DIR=logs/mcp_http_service
+MIROFLOW_MCP_RESTART_DELAY=5
 ```
 
 Normal provider credentials still come from `.env` or process env:
@@ -99,6 +101,16 @@ main.py trace --config_file_name=$MIROFLOW_MCP_CONFIG_NAME
 
 then returns the Markdown report content.
 
+Each `research` call also stores task-level diagnostics next to the normal
+Markdown and JSON trace:
+
+```text
+logs/mcp/<task_id>.md
+logs/mcp/<task_id>.log
+logs/mcp/<task_id>.stdout.log
+logs/mcp/<task_id>.stderr.log
+```
+
 ## HTTP / Streamable HTTP Server
 
 Start the HTTP MCP server:
@@ -110,6 +122,32 @@ MIROFLOW_MCP_PORT=8080 \
 MIROFLOW_MCP_PATH=/mcp \
 uv run ./scripts/run_miroflow_research_mcp_http.sh
 ```
+
+For long-running service deployments, use the supervised runner instead:
+
+```bash
+MIROFLOW_MCP_CONFIG_NAME=agent_hybrid_codex_deepseek \
+MIROFLOW_MCP_HOST=0.0.0.0 \
+MIROFLOW_MCP_PORT=8080 \
+MIROFLOW_MCP_PATH=/mcp \
+MIROFLOW_MCP_SERVICE_LOG_DIR=logs/mcp_http_service \
+uv run ./scripts/run_miroflow_research_mcp_http_supervised.sh
+```
+
+The supervised runner restarts the MCP HTTP server after unexpected exits and
+keeps one stdout/stderr pair for each server run:
+
+```text
+logs/mcp_http_service/supervisor.log
+logs/mcp_http_service/current.stdout.log
+logs/mcp_http_service/current.stderr.log
+logs/mcp_http_service/server_<timestamp>_<pid>.stdout.log
+logs/mcp_http_service/server_<timestamp>_<pid>.stderr.log
+```
+
+If a client reports `MCP error -32000: Connection closed`, check the service
+supervisor log first, then inspect the task-level stdout/stderr files for the
+request that was running at the time.
 
 The endpoint is:
 
